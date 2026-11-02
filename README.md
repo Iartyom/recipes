@@ -1,0 +1,22 @@
+# 🍲 המתכונים שלנו
+
+אוסף מתכונים אישי. האתר: https://iartyom.github.io/recipes/
+
+## הוספת מתכון
+**מהאתר (גם מהטלפון):** "➕ הוספת מתכון" → מדביקים קישור או טקסט → "שליחה ל-GitHub" → Submit.
+פעולת GitHub (`add-recipe`) קוראת את המתכון, מוסיפה ל-`recipes.json`, בונה את `index.html` מחדש וסוגרת את ה-issue עם סיכום.
+אם קריאת הקישור נכשלה — מופיעה תגובה ב-issue, וה-issue נשאר פתוח; מדביקים את הטקסט במקום.
+
+**מהמחשב:**
+```bash
+python add_recipe.py https://site/recipe        # קישור
+python add_recipe.py -  < recipe.txt             # טקסט
+git add recipes.json index.html && git commit -m "מתכון" && git push
+```
+
+פורמט טקסט: שורה ראשונה = שם המתכון; אחר כך כותרת "מצרכים" ואז "אופן ההכנה". שורה "תגיות: עוף, מהיר" מוסיפה תגיות.
+
+## איך זה עובד
+- `recipes.json` הוא מקור האמת. `build_html.py` מייצר ממנו `index.html` עצמאי (בלי שרת).
+- קישורים: נקרא ה-schema.org Recipe (JSON-LD) שרוב אתרי המתכונים מפרסמים.
+- מועדפים (★) נשמרים בדפדפן בלבד.
