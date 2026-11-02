@@ -249,7 +249,9 @@ function renderView(id) {
         `<label><input type="checkbox"><span>${esc(i)}</span></label>`).join("") || '<div class="src">אין רשימת מצרכים</div>'}</div></div>
       <div class="box"><h3>👩‍🍳 אופן ההכנה</h3><ol class="steps" dir="auto">${steps || '<li class="sec">אין שלבים</li>'}</ol></div>
     </div>
-    <div class="src">${host ? `מקור: <a href="${esc(r.source_url)}" target="_blank" rel="noopener">${esc(host)} ↗</a> · ` : ""}נוסף ${esc(r.added || "")}</div>`;
+    ${(r.notes || []).length ? `<div class="box" style="margin-top:22px"><h3>💡 טיפים והערות</h3><div dir="auto">${r.notes.map(s =>
+      /:$/.test(s) && s.length < 45 ? `<h4 style="margin:12px 0 4px;color:var(--basil)">${esc(s)}</h4>` : `<p style="margin:4px 0">${esc(s)}</p>`).join("")}</div></div>` : ""}
+    <div class="src">${r.image_auto ? "📷 תמונה להמחשה (Pexels) · " : ""}${host ? `מקור: <a href="${esc(r.source_url)}" target="_blank" rel="noopener">${esc(host)} ↗</a> · ` : ""}נוסף ${esc(r.added || "")}</div>`;
   $("v-fav").onclick = () => { fav.has(r.id) ? fav.delete(r.id) : fav.add(r.id); saveFav(); renderView(id); };
   $("v-edit").onclick = () => openEdit(r);
   // Two-tap delete instead of confirm(): no blocking browser dialog.
@@ -272,18 +274,14 @@ document.addEventListener("keydown", e => { if (e.key === "Escape") closeSheet()
 function openAdd() {
   openSheet(`
     <h2>➕ מתכון חדש</h2>
-    <p class="hint">הדביקו קישור לדף מתכון — או את כל הטקסט: שורה ראשונה = שם, ואז "מצרכים" ו"אופן ההכנה".</p>
-    <textarea id="a-text" dir="auto" placeholder="https://… או טקסט המתכון"></textarea>
-    <label class="f">תגיות (לא חובה)</label>
-    <input id="a-tags" dir="auto" placeholder="עוף, ערב שבת, מהיר">
-    <p class="hint" style="margin-top:10px">${LOCAL ? "נשמר מיד ונכנס ל-git." : "ייפתח issue מוכן ב-GitHub — לוחצים Submit, והמתכון מופיע כאן תוך כדקה."}</p>
+    <p class="hint">רק להדביק — קישור או את כל טקסט המתכון. מצרכים, שלבים, זמן, מנות, תגיות ותמונה נשלפים לבד.</p>
+    <textarea id="a-text" dir="auto" style="min-height:180px" placeholder="https://… או טקסט המתכון"></textarea>
+    <p class="hint" style="margin-top:10px">${LOCAL ? "נשמר מיד ונכנס ל-git. אפשר לתקן אחר כך ב-✏️." : "ייפתח issue מוכן ב-GitHub — לוחצים Submit, והמתכון מופיע כאן תוך כדקה."}</p>
     <div class="row"><button id="a-go">${LOCAL ? "הוספה" : "שליחה ל-GitHub"}</button><button class="soft" onclick="closeSheet()">ביטול</button></div>`);
   $("a-text").focus();
   $("a-go").onclick = () => {
     const text = $("a-text").value.trim(); if (!text) return;
-    const tags = $("a-tags").value.trim();
-    const body = text + (tags ? `\n\nתגיות: ${tags}` : "");
-    change("add", body, "מתכון: " + text.split("\n")[0].slice(0, 60), null);
+    change("add", text, "מתכון: " + text.split("\n")[0].slice(0, 60), null);
   };
 }
 function openEdit(r) {
@@ -300,6 +298,7 @@ function openEdit(r) {
     <label class="f">קישור לתמונה</label><input id="e-img" dir="ltr" value="${v(r.image)}">
     <label class="f">מצרכים — שורה לכל מצרך</label><textarea id="e-ing" dir="auto" style="min-height:150px">${v((r.ingredients || []).join("\n"))}</textarea>
     <label class="f">שלבים — שורה לכל שלב (שורה שמסתיימת ב-":" = כותרת)</label><textarea id="e-steps" dir="auto" style="min-height:180px">${v((r.steps || []).join("\n"))}</textarea>
+    <label class="f">טיפים והערות — שורה לכל הערה</label><textarea id="e-notes" dir="auto" style="min-height:90px">${v((r.notes || []).join("\n"))}</textarea>
     <label class="f">מקור</label><input id="e-src" dir="ltr" value="${v(r.source_url)}">
     <div class="row"><button class="green" id="e-go">${LOCAL ? "שמירה" : "שליחה ל-GitHub"}</button><button class="soft" onclick="closeSheet()">ביטול</button></div>`);
   $("e-go").onclick = () => {
@@ -307,7 +306,9 @@ function openEdit(r) {
     const rec = {id: r.id, title: $("e-title").value.trim(), description: $("e-desc").value.trim(),
       servings: $("e-serv").value.trim(), total_minutes: $("e-min").value.trim(), image: $("e-img").value.trim(),
       tags: $("e-tags").value.split(",").map(s => s.trim()).filter(Boolean),
-      ingredients: lines("e-ing"), steps: lines("e-steps"), source_url: $("e-src").value.trim()};
+      ingredients: lines("e-ing"), steps: lines("e-steps"), notes: lines("e-notes"), source_url: $("e-src").value.trim()};
+    // A photo the user typed in is theirs, not an auto-picked illustration.
+    rec.image_auto = !!r.image_auto && rec.image === r.image;
     if (!rec.title) return toast("חסר שם מתכון");
     change("save", rec, "עריכת מתכון: " + rec.title, r.id);
   };

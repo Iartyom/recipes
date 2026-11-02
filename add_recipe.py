@@ -124,15 +124,39 @@ def from_html(page, url):
             (minutes(rec.get("prepTime")) or 0) + (minutes(rec.get("cookTime")) or 0)) or None,
         "ingredients": [clean(i) for i in rec.get("recipeIngredient") or [] if clean(i)],
         "steps": _steps(rec.get("recipeInstructions")),
+        "notes": [],
         "tags": [t for t in dict.fromkeys(tags) if t],
         "source_url": url,
     }
 
 
+# A short line opening tips/storage/serving notes — everything after it is not a cooking step.
+NOTES_HDR = re.compile(r"^(?:טיפים|טיפ|הערות|הערה|תחליפים|אחסון|הקפאה|הגשה|וריאציות|מרקם|שדרוגים|"
+                       r"tips|notes|storage|variations)", re.I)
+# Ingredient-looking line (used only when the paste has no section headers): starts with a quantity/unit.
+# No \b after the digit class: "500" and "½" would fail a word boundary.
+QTY = re.compile(r"^(?:[\d½¼¾⅓⅔⅛]|(?:חצי|רבע|שליש|כוס|כוסות|כף|כפות|כפית|כפיות|קורט|חופן|מעט|גרם|ק\"ג|ליטר|מ\"ל|"
+                 r"שן|שיני|חבילה|חבילת|קופסה|קופסת|צרור)(?=\s|$))")
+
+
+def _is_notes_header(line):
+    return len(line) <= 40 and not line.rstrip().endswith((".", ",")) and bool(NOTES_HDR.match(line))
+
+
+def split_notes(steps):
+    """Move everything from the first tips/storage header onward out of the steps (headers keep a ':')."""
+    for i, s in enumerate(steps):
+        if i and _is_notes_header(s.rstrip(":")):
+            notes = [n.rstrip(":") + ":" if _is_notes_header(n.rstrip(":")) else n for n in steps[i:]]
+            return steps[:i], notes
+    return steps, []
+
+
 def from_text(text):
-    """Parse pasted text: first line = title; sections start at ingredient/step headers."""
+    """Parse pasted text: first line = title; sections start at ingredient/step headers.
+    Without headers, quantity-led lines become ingredients and the rest steps."""
     lines = [ln.strip() for ln in text.splitlines()]
-    lines = [ln for ln in lines if ln]
+    lines = [ln for ln in lines if ln and not URL_RE.fullmatch(ln)]
     if not lines:
         raise ValueError("טקסט ריק")
     title, rest = lines[0], lines[1:]
@@ -149,29 +173,132 @@ def from_text(text):
         if not item:
             continue
         (cur if cur is not None else desc).append(item)
-    # No headers at all: treat the body as steps rather than losing it in the description.
     if not ings and not steps:
-        steps, desc = desc, []
+        # No headers: the first prose line(s) before any quantity line are the description.
+        body, desc = desc, []
+        for item in body:
+            if QTY.match(item) and len(item) <= 80:
+                ings.append(item)
+            elif not ings and not steps and len(body) > 2 and len(item) > 60:
+                desc.append(item)
+            else:
+                steps.append(item)
+    steps, notes = split_notes(steps)
     src = URL_RE.search(text)
     return {"title": BULLET.sub("", title), "description": " ".join(desc), "image": "", "servings": "",
-            "total_minutes": None, "ingredients": ings, "steps": steps, "tags": [],
+            "total_minutes": None, "ingredients": ings, "steps": steps, "notes": notes, "tags": [],
             "source_url": src.group(0) if src else ""}
 
 
+# ---------- auto-fill: time, servings, tags, photo ----------
+_NUM = r"(\d+(?:\.\d+)?)"
+TIME_RE = re.compile(rf"(?:{_NUM}\s*[-–]\s*)?{_NUM}\s*(?:דקות|דק['׳]|דקה|minutes?|mins?)\b"
+                     rf"|(שעה וחצי)|(חצי שעה)|(?:{_NUM}\s*)?(שעות|שעה|hours?)\b", re.I)
+SERV_RE = re.compile(r"(?:ל[-־]?\s*)?(\d+)\s*(מנות|סועדים|יחידות|קציצות|עוגיות|לביבות|servings|serves)", re.I)
+
+
+def guess_minutes(steps):
+    """Sum the largest time mentioned in each step ("אופים 18–22 דקות" → 22). None when no step mentions time."""
+    total = 0
+    for s in steps:
+        best = 0
+        for m in TIME_RE.finditer(s):
+            lo, mins, h15, h05, hn, hw = m.groups()
+            if mins:
+                best = max(best, float(mins))
+            elif h15:
+                best = max(best, 90)
+            elif h05:
+                best = max(best, 30)
+            elif hw:
+                best = max(best, float(hn or 1) * 60)
+        total += best
+    return int(total) or None
+
+
+# Hebrew stem → (tag, English photo keyword). Order matters: specific dishes before generic ingredients.
+FOOD = [("שקשוק", "ארוחת בוקר", "shakshuka"), ("קציצ", "", "meatballs"), ("שניצל", "עוף", "schnitzel"),
+        ("פרגי", "עוף", "grilled chicken"), ("עוף", "עוף", "chicken"), ("סלמון", "דגים", "salmon"),
+        ("דג", "דגים", "fish"), ("סטייק", "בשרי", "steak"), ("אנטריקוט", "בשרי", "steak"),
+        ("עוגת גבינה", "קינוח", "cheesecake"), ("עוגיות", "קינוח", "cookies"), ("עוג", "קינוח", "cake"),
+        ("מאפינס", "קינוח", "muffins"), ("גלידה", "קינוח", "ice cream"), ("שוקולד", "קינוח", "chocolate"),
+        ("חלה", "מאפים", "challah bread"), ("לחם", "מאפים", "bread"), ("פיצה", "מאפים", "pizza"),
+        ("בורקס", "מאפים", "pastry"), ("פשטיד", "", "quiche"), ("פסטה", "פסטה", "pasta"),
+        ("ספגטי", "פסטה", "spaghetti"), ("לזניה", "פסטה", "lasagna"), ("מרק", "מרקים", "soup"),
+        ("סלט", "סלטים", "salad"), ("חומוס", "", "hummus"), ("פלאפל", "", "falafel"), ("קוסקוס", "", "couscous"),
+        ("מג'דר", "", "lentils rice"), ("עדשים", "", "lentils"), ("אורז", "", "rice"), ("לביבות", "", "fritters"),
+        ("פנקייק", "ארוחת בוקר", "pancakes"), ("חביתה", "ארוחת בוקר", "omelette"), ("ביצ", "", "eggs"),
+        ("בטטה", "", "sweet potato"), ("דלעת", "", "pumpkin"), ("חציל", "", "eggplant"), ("קישוא", "", "zucchini"),
+        ("פטריות", "", "mushrooms"), ("תפוח אדמה", "", "potatoes"), ("תפוז", "", "orange"), ("לימון", "", "lemon"),
+        ("בקר", "בשרי", "beef"), ("בשר", "בשרי", "meat")]
+RULES = [(r"ילדים|לקטנטנים|תינוק|פעוט", "לילדים"), (r"טבעוני", "טבעוני"),
+         (r"להקפיא|הקפאה|במקפיא", "מתאים להקפאה"), (r"\bבתנור|תנור ל|לתנור", "בתנור")]
+
+
+def auto_tags(r):
+    title = r.get("title", "")
+    every = " ".join([title, *r.get("ingredients", []), *r.get("steps", []), *r.get("notes", [])])
+    tags = [tag for stem, tag, _ in FOOD if tag and stem in title]
+    # Meat/chicken/fish count when they're an ingredient too, not just in the title.
+    tags += [tag for stem, tag, _ in FOOD if tag in ("בשרי", "עוף", "דגים") and
+             any(stem in i for i in r.get("ingredients", []))]
+    tags += [tag for pat, tag in RULES if re.search(pat, every)]
+    if r.get("total_minutes") and r["total_minutes"] <= 30:
+        tags.append("מהיר")
+    return list(dict.fromkeys(tags))
+
+
+PEXELS_KEY = "U8gPRmt7N06ttWpRPmyrzqV5iCXAWFqTIQDcenAyBrAZfHMMXuTKKy2w"  # free key, also public in dira-nuriot
+
+
+def find_image(title):
+    """Illustrative photo from Pexels by English keywords mapped from the Hebrew title. '' on no match/failure."""
+    words = [en for stem, _, en in FOOD if stem in title][:2]
+    if not words:
+        return ""
+    url = "https://api.pexels.com/v1/search?per_page=1&orientation=landscape&query=" + \
+        urllib.request.quote(" ".join(words) + " food")
+    try:
+        req = urllib.request.Request(url, headers={"Authorization": PEXELS_KEY, "User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            photos = json.loads(r.read().decode("utf-8")).get("photos") or []
+        return photos[0]["src"]["large"] if photos else ""
+    except Exception:  # a photo is a nice-to-have; never fail the add over it
+        return ""
+
+
+def enrich(r):
+    """Fill what the paste/page didn't say: notes split, time, servings, tags, photo. Never overwrites a value."""
+    r.setdefault("notes", [])
+    if not r["notes"]:
+        r["steps"], r["notes"] = split_notes(r.get("steps", []))
+    if not r.get("total_minutes"):
+        r["total_minutes"] = guess_minutes(r.get("steps", []))
+    if not r.get("servings"):
+        m = SERV_RE.search(" ".join([r.get("title", ""), r.get("description", ""), *r.get("steps", [])]))
+        r["servings"] = f"{m.group(1)} {m.group(2)}" if m else ""
+    r["tags"] = list(dict.fromkeys(r.get("tags", []) + auto_tags(r)))
+    if not r.get("image"):
+        r["image"] = find_image(r.get("title", ""))
+        r["image_auto"] = bool(r["image"])
+    return r
+
+
 def parse_input(raw):
-    """Decide URL vs text. Input that is just a URL (plus optional tags line) is fetched."""
+    """Decide URL vs text, then auto-fill the rest. A paste that is basically a link (little other text) is fetched."""
     tags = []
     m = TAGS_RE.search(raw)
     if m:
         tags = [t.strip() for t in re.split(r"[,،]", m.group(1)) if t.strip()]
         raw = TAGS_RE.sub("", raw)
     body = raw.strip()
-    if URL_RE.fullmatch(body):
-        recipe = from_html(fetch(body), body)
+    url = URL_RE.search(body)
+    if url and len(URL_RE.sub("", body).strip()) < 80:
+        recipe = from_html(fetch(url.group(0)), url.group(0))
     else:
         recipe = from_text(body)
     recipe["tags"] = list(dict.fromkeys(tags + recipe["tags"]))
-    return recipe
+    return enrich(recipe)
 
 
 def slug(title, taken):
@@ -220,6 +347,7 @@ def normalize(r):
     return {"title": title, "description": str(r.get("description") or "").strip(),
             "image": str(r.get("image") or "").strip(), "servings": str(r.get("servings") or "").strip(),
             "total_minutes": mins, "ingredients": _lines(r.get("ingredients")), "steps": _lines(r.get("steps")),
+            "notes": _lines(r.get("notes")), "image_auto": bool(r.get("image_auto")) and bool(r.get("image")),
             "tags": _lines(r["tags"].split(",") if isinstance(r.get("tags"), str) else r.get("tags")),
             "source_url": str(r.get("source_url") or "").strip()}
 

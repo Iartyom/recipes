@@ -99,3 +99,45 @@ def test_delete_missing_raises():
     except ValueError:
         return
     raise AssertionError("expected ValueError")
+
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_photo_lookup(monkeypatch):
+    # Keep tests offline: the Pexels lookup is the only network call in enrich().
+    monkeypatch.setattr(ar, "find_image", lambda title: "")
+
+
+KIDS = """קציצות בקר ובטטה לקטנטנים
+קציצות רכות ועסיסיות, מושלמות לשלב ההזנה המשלימה ולכל המשפחה, עם ברזל ואבץ מהבקר ומתיקות מהבטטה.
+500 גרם בשר בקר טחון
+½ כוס מחית בטטה
+1 כפית אבקת שום
+מחממים תנור ל־180 מעלות.
+אופים כ־18–22 דקות, עד שהקציצות עשויות.
+מצננים לפני ההגשה.
+אחסון והקפאה
+במקפיא: עד 3 חודשים."""
+
+
+def test_headerless_paste_is_classified_and_enriched():
+    r = ar.parse_input(KIDS)
+    assert r["ingredients"] == ["500 גרם בשר בקר טחון", "½ כוס מחית בטטה", "1 כפית אבקת שום"]
+    assert r["steps"][0].startswith("מחממים") and r["steps"][-1] == "מצננים לפני ההגשה."
+    assert r["notes"] == ["אחסון והקפאה:", "במקפיא: עד 3 חודשים."]
+    assert r["description"].startswith("קציצות רכות")
+    assert r["total_minutes"] == 22
+    assert {"בשרי", "לילדים", "בתנור", "מתאים להקפאה", "מהיר"} <= set(r["tags"])
+
+
+def test_guess_minutes_hours_and_ranges():
+    assert ar.guess_minutes(["מתפיחים שעה וחצי", "אופים 30-35 דקות", "מצננים"]) == 125
+    assert ar.guess_minutes(["מערבבים"]) is None
+
+
+def test_link_with_a_few_words_is_fetched(monkeypatch):
+    monkeypatch.setattr(ar, "fetch", lambda url: (FIX / "recipe_page.html").read_text(encoding="utf-8"))
+    r = ar.parse_input("תראי את זה https://example.com/shakshuka")
+    assert r["title"] == "שקשוקה" and r["source_url"] == "https://example.com/shakshuka"

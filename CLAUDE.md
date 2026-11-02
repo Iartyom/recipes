@@ -13,7 +13,9 @@ python add_recipe.py <url|text|->  # parse + append to recipes.json + rebuild
 ## Architecture
 - `recipes.json` — source of truth: `{"recipes":[{id,title,description,image,servings,total_minutes,ingredients[],steps[],tags[],source_url,added}]}`.
   Same `source_url` replaces the old record (keeps id/added). Step strings ending with ":" render as section headers.
-- `add_recipe.py` — URL → schema.org Recipe JSON-LD (flattens @graph, HowToSection); text → headers "מצרכים"/"אופן ההכנה".
+- `add_recipe.py` — URL → schema.org Recipe JSON-LD (flattens @graph, HowToSection); text → headers "מצרכים"/"אופן ההכנה",
+  or without headers quantity-led lines = ingredients. `enrich()` then fills time (from step text), servings, tags
+  (FOOD/RULES tables), tips/storage → `notes`, and an illustrative Pexels photo (`image_auto`). Never overwrites a value.
   Fails loudly (exit 1, Hebrew message) instead of saving a half-parsed recipe.
 - `.github/workflows/add-recipe.yml` — issue titled "מתכון…" by the repo owner → run add_recipe.py on the body → commit → close issue.
   The body goes through an env var (never `${{ }}` inside `run:`). Only the owner's issues are processed (public repo).
