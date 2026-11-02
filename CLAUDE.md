@@ -21,3 +21,9 @@ python add_recipe.py <url|text|->  # parse + append to recipes.json + rebuild
 ## Conventions
 - Runtime scripts are Python stdlib only; tests stay offline.
 - Some recipe sites may block GitHub runner IPs (403) — the fallback is pasting text, or running add_recipe.py locally.
+
+## Local mode (full CRUD)
+`python serve.py` → http://127.0.0.1:8770. The page detects localhost and calls `/api/add` (URL/text), `/api/save`
+(recipe JSON), `/api/delete` ({id}); each change rewrites recipes.json, rebuilds index.html, commits, pushes if a
+remote exists. On GitHub Pages the same buttons open prefilled issues ("מתכון:", "עריכת מתכון:", "מחיקת מתכון:")
+handled by `add_recipe.py --issue` in the add-recipe workflow. Light-mode-only design (owner's request).

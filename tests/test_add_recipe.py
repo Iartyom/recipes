@@ -73,3 +73,29 @@ def test_build_escapes_script_close(tmp_path, monkeypatch):
     monkeypatch.setattr(build_html, "ROOT", tmp_path)
     out = build_html.build().read_text(encoding="utf-8")
     assert out.count("</script>") == 1
+
+
+def test_update_keeps_id_and_added_and_normalizes():
+    data = {"recipes": [{"id": "a", "title": "x", "added": "2026-11-01", "ingredients": [], "steps": []}]}
+    rec = ar.update({"id": "a", "title": " חדש ", "ingredients": "1\n\n2", "tags": "x, y", "total_minutes": "15"}, data)
+    assert rec["id"] == "a" and rec["added"] == "2026-11-01" and rec["title"] == "חדש"
+    assert rec["ingredients"] == ["1", "2"] and rec["tags"] == ["x", "y"] and rec["total_minutes"] == 15
+
+
+def test_apply_issue_routes_by_title():
+    data = {"recipes": []}
+    ar.apply_issue("מתכון: סלט", "סלט\nמצרכים:\nעגבנייה\nאופן ההכנה:\nחותכים", data)
+    rid = data["recipes"][0]["id"]
+    body = '```json\n{"id": "%s", "title": "סלט ירקות", "steps": ["חותכים"]}\n```' % rid
+    assert "עודכן" in ar.apply_issue("עריכת מתכון: סלט", body, data)
+    assert data["recipes"][0]["title"] == "סלט ירקות"
+    ar.apply_issue("מחיקת מתכון: סלט", rid + "\n", data)
+    assert data["recipes"] == []
+
+
+def test_delete_missing_raises():
+    try:
+        ar.delete("nope", {"recipes": []})
+    except ValueError:
+        return
+    raise AssertionError("expected ValueError")

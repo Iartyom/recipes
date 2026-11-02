@@ -108,10 +108,16 @@ def from_html(page, url):
     cats = rec.get("recipeCategory") or []
     kws = rec.get("keywords") or []
     tags = [clean(t) for t in (cats if isinstance(cats, list) else [cats])]
-    tags += [clean(t) for t in (kws if isinstance(kws, list) else str(kws).split(","))][:5]
+    # Sites ship keywords as a list, a comma string, or a list holding one comma string — flatten all three.
+    kws = [k for item in (kws if isinstance(kws, list) else [kws]) for k in re.split(r"[,،]", str(item))]
+    tags += [clean(k) for k in kws if 0 < len(clean(k)) <= 20][:4]
+    desc = clean(rec.get("description"))
+    # Some sites stuff the whole recipe into description; keep a teaser, the full text is in ingredients/steps.
+    if len(desc) > 280:
+        desc = desc[:280].rsplit(" ", 1)[0] + "…"
     return {
         "title": clean(rec.get("name")) or _meta(page, "og:title") or url,
-        "description": clean(rec.get("description")),
+        "description": desc,
         "image": _image(rec.get("image")) or _meta(page, "og:image"),
         "servings": clean(yld) if yld else "",
         "total_minutes": minutes(rec.get("totalTime")) or (
@@ -196,24 +202,88 @@ def add(recipe, data):
     return recipe
 
 
+def _lines(v):
+    if isinstance(v, str):
+        v = v.splitlines()
+    return [str(x).strip() for x in (v or []) if str(x).strip()]
+
+
+def normalize(r):
+    """Coerce a recipe edited in the page into the stored shape (lists of non-empty strings, int minutes)."""
+    try:
+        mins = int(r.get("total_minutes")) if str(r.get("total_minutes") or "").strip() else None
+    except ValueError:
+        mins = None
+    title = str(r.get("title") or "").strip()
+    if not title:
+        raise ValueError("חסר שם מתכון")
+    return {"title": title, "description": str(r.get("description") or "").strip(),
+            "image": str(r.get("image") or "").strip(), "servings": str(r.get("servings") or "").strip(),
+            "total_minutes": mins, "ingredients": _lines(r.get("ingredients")), "steps": _lines(r.get("steps")),
+            "tags": _lines(r["tags"].split(",") if isinstance(r.get("tags"), str) else r.get("tags")),
+            "source_url": str(r.get("source_url") or "").strip()}
+
+
+def update(recipe, data):
+    """Replace the recipe with the same id (edit from the page). Keeps id and 'added'."""
+    items = data["recipes"]
+    i = next((k for k, r in enumerate(items) if r["id"] == recipe.get("id")), None)
+    if i is None:
+        raise ValueError(f"מתכון לא נמצא: {recipe.get('id')}")
+    items[i] = {**normalize(recipe), "id": items[i]["id"], "added": items[i].get("added")}
+    return items[i]
+
+
+def delete(rid, data):
+    before = len(data["recipes"])
+    data["recipes"] = [r for r in data["recipes"] if r["id"] != rid]
+    if len(data["recipes"]) == before:
+        raise ValueError(f"מתכון לא נמצא: {rid}")
+
+
+def save(data):
+    DATA.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    import build_html
+    build_html.build()
+
+
+def apply_issue(title, body, data):
+    """Issue → change. Titles: "מתכון: …" add (URL/text), "עריכת מתכון: …" body = recipe JSON,
+    "מחיקת מתכון: …" body = recipe id. Returns a Hebrew summary for the issue comment."""
+    t = title.strip()
+    if t.startswith("מחיקת מתכון"):
+        rid = body.strip().splitlines()[0].strip()
+        delete(rid, data)
+        return f"🗑️ נמחק: {rid}"
+    if t.startswith("עריכת מתכון"):
+        # The page wraps the JSON in a ```json fence so GitHub shows it readably.
+        raw = re.sub(r"^\s*```(?:json)?|```\s*$", "", body.strip())
+        rec = update(json.loads(raw), data)
+        return f"✏️ עודכן: {rec['title']}"
+    rec = add(parse_input(body), data)
+    return f"✅ נוסף: {rec['title']} — {len(rec['ingredients'])} מצרכים, {len(rec['steps'])} שלבים (#{rec['id']})"
+
+
 def main(argv):
+    """CLI: <url|text> or '-' adds; '--issue' applies an issue (title in $ISSUE_TITLE, body on stdin)."""
+    import os
     for s in (sys.stdout, sys.stderr):
         s.reconfigure(encoding="utf-8")
     if not argv:
         print(__doc__)
         return 2
-    raw = sys.stdin.read() if argv == ["-"] else " ".join(argv)
-    try:
-        recipe = parse_input(raw)
-    except Exception as e:  # network/parse failures become a readable message for the issue comment
-        print(f"❌ לא הצלחתי להוסיף: {e}")
-        return 1
+    if argv == ["--issue"]:
+        title, raw = os.environ.get("ISSUE_TITLE", "מתכון"), sys.stdin.read()
+    else:
+        title, raw = "מתכון", sys.stdin.read() if argv == ["-"] else " ".join(argv)
     data = load()
-    rec = add(recipe, data)
-    DATA.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    import build_html
-    build_html.build()
-    print(f"✅ נוסף: {rec['title']} — {len(rec['ingredients'])} מצרכים, {len(rec['steps'])} שלבים (#{rec['id']})")
+    try:
+        msg = apply_issue(title, raw, data)
+    except Exception as e:  # network/parse failures become a readable message for the issue comment
+        print(f"❌ לא הצלחתי: {e}")
+        return 1
+    save(data)
+    print(msg)
     return 0
 
 

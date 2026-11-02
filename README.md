@@ -20,3 +20,7 @@ git add recipes.json index.html && git commit -m "מתכון" && git push
 - `recipes.json` הוא מקור האמת. `build_html.py` מייצר ממנו `index.html` עצמאי (בלי שרת).
 - קישורים: נקרא ה-schema.org Recipe (JSON-LD) שרוב אתרי המתכונים מפרסמים.
 - מועדפים (★) נשמרים בדפדפן בלבד.
+
+## שליטה מלאה מהעמוד
+`python serve.py` → נפתח http://127.0.0.1:8770 — הוספה, עריכה ומחיקה נשמרות מיד ונכנסות ל-git.
+מהאתר הציבורי (GitHub Pages) אותם כפתורים פותחים issue מוכן, והשינוי מופיע תוך כדקה.

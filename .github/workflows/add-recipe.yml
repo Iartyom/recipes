@@ -1,6 +1,7 @@
 name: add-recipe
 
-# An issue titled "מתכון: ..." (opened from the site's add form) becomes a commit to recipes.json + index.html.
+# Issues opened from the site become commits to recipes.json + index.html:
+# "מתכון: …" add, "עריכת מתכון: …" edit (JSON body), "מחיקת מתכון: …" delete (id body).
 on:
   issues:
     types: [opened]
@@ -18,7 +19,8 @@ jobs:
     # Public repo: only the owner's issues may write data.
     if: >-
       github.event.issue.user.login == github.repository_owner &&
-      (startsWith(github.event.issue.title, 'מתכון') || startsWith(github.event.issue.title, 'recipe'))
+      (startsWith(github.event.issue.title, 'מתכון') || startsWith(github.event.issue.title, 'עריכת מתכון') ||
+       startsWith(github.event.issue.title, 'מחיקת מתכון') || startsWith(github.event.issue.title, 'recipe'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,8 +31,9 @@ jobs:
         id: add
         env:
           BODY: ${{ github.event.issue.body }}   # via env, never inlined into the script (injection)
+          ISSUE_TITLE: ${{ github.event.issue.title }}
         run: |
-          if printf '%s' "$BODY" | python add_recipe.py - > out.txt 2>&1; then
+          if printf '%s' "$BODY" | python add_recipe.py --issue > out.txt 2>&1; then
             echo "ok=true" >> "$GITHUB_OUTPUT"
           else
             echo "ok=false" >> "$GITHUB_OUTPUT"
@@ -44,7 +47,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add recipes.json index.html
-          git commit -m "מתכון חדש (#$N)" || exit 0
+          git commit -m "$(head -1 out.txt) (#$N)" || exit 0
           git pull --rebase -q && git push
       - name: Reply on the issue
         if: always()
