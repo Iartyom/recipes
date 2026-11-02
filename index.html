@@ -60,7 +60,7 @@ a{color:var(--accent)}
       <input id="add-tags" placeholder="תגיות (לא חובה): עוף, ערב שבת" dir="auto">
       <div class="row" style="margin-top:8px">
         <button id="add-go">שליחה ל-GitHub</button>
-        <span class="sub">נפתח issue מוכן — לוחצים Submit, והמתכון מופיע כאן תוך כדקה.</span>
+        <span class="sub" id="add-hint">נפתח issue מוכן — לוחצים Submit, והמתכון מופיע כאן תוך כדקה.</span>
       </div>
     </details>
     <input id="q" type="search" placeholder="חיפוש לפי שם, מצרך או תגית…" dir="auto">
@@ -141,13 +141,30 @@ document.getElementById("tags").onclick = e => {
 document.getElementById("grid").onclick = e => {
   const c = e.target.closest(".card"); if (c) location.hash = encodeURIComponent(c.dataset.id);
 };
-document.getElementById("add-go").onclick = () => {
+// Served by serve.py on this machine → save directly; otherwise (GitHub Pages / file) → prefilled issue.
+const LOCAL = /^(127\.0\.0\.1|localhost)$/.test(location.hostname);
+if (LOCAL) {
+  document.getElementById("add-go").textContent = "הוספה";
+  document.getElementById("add-hint").textContent = "שמירה ישירה (שרת מקומי) — קישור נקרא אוטומטית.";
+}
+document.getElementById("add-go").onclick = async () => {
   const text = document.getElementById("add-text").value.trim();
   if (!text) return;
   const tags = document.getElementById("add-tags").value.trim();
+  const body = text + (tags ? `\n\nתגיות: ${tags}` : "");
+  const hint = document.getElementById("add-hint");
+  if (LOCAL) {
+    hint.textContent = "⏳ קורא את המתכון…";
+    try {
+      const r = await (await fetch("/api/add", {method: "POST", body})).json();
+      if (!r.ok) { hint.textContent = "❌ " + r.error; return; }
+      location.href = "/#" + encodeURIComponent(r.id);
+      location.reload();  // the server rebuilt index.html with the new recipe
+    } catch (e) { hint.textContent = "❌ השרת המקומי לא עונה — הפעילו python serve.py"; }
+    return;
+  }
   const first = text.split("\n")[0].slice(0, 60);
   // Title prefix "מתכון:" is what the add-recipe workflow listens for.
-  const body = text + (tags ? `\n\nתגיות: ${tags}` : "");
   window.open(`https://github.com/${REPO}/issues/new?title=${encodeURIComponent("מתכון: " + first)}&body=${encodeURIComponent(body)}`, "_blank");
 };
 const route = () => renderView(decodeURIComponent(location.hash.slice(1)));
