@@ -10,6 +10,7 @@ import json
 import pathlib
 import re
 import sys
+import urllib.error
 import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parent
@@ -34,9 +35,24 @@ def clean(x):
 
 def fetch(url):
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept-Language": "he,en;q=0.8"})
-    with urllib.request.urlopen(req, timeout=25) as r:
-        charset = r.headers.get_content_charset() or "utf-8"
-        return r.read().decode(charset, errors="replace")
+    try:
+        with urllib.request.urlopen(req, timeout=25) as r:
+            charset = r.headers.get_content_charset() or "utf-8"
+            page = r.read().decode(charset, errors="replace")
+    except urllib.error.HTTPError as e:
+        # 403/503 from a bot wall (Cloudflare etc.) — say so instead of a generic HTTP error.
+        if e.code in (403, 429, 503):
+            raise ValueError(BLOCKED_MSG) from None
+        raise
+    # Some walls answer 200 with a challenge page; without this the user sees "no schema.org Recipe".
+    # Match only challenge-page titles: a bare "captcha" also appears in normal comment forms (reCAPTCHA).
+    if re.search(r"<title>\s*(?:Attention Required! \| Cloudflare|Just a moment\.\.\.)", page[:20000], re.I) \
+            and not any(_is_recipe(o) for o in _ld_objects(page)):
+        raise ValueError(BLOCKED_MSG)
+    return page
+
+
+BLOCKED_MSG = "האתר חוסם קריאה אוטומטית (Cloudflare/קפצ'ה). העתיקו את טקסט המתכון מהדף והדביקו אותו במקום הקישור."
 
 
 def _ld_objects(page):
@@ -102,7 +118,7 @@ def from_html(page, url):
     """Parse a recipe page. Prefers schema.org Recipe JSON-LD (most recipe sites ship it for Google)."""
     rec = next((o for o in _ld_objects(page) if _is_recipe(o)), None)
     if rec is None:
-        raise ValueError("לא נמצא מתכון מובנה בדף (אין schema.org Recipe). הדביקו את הטקסט במקום הקישור.")
+        return from_article(page, url)   # plain blog post (e.g. michalwaxman.com) — no structured data
     yld = rec.get("recipeYield")
     yld = yld[0] if isinstance(yld, list) and yld else yld
     cats = rec.get("recipeCategory") or []
@@ -150,6 +166,71 @@ def split_notes(steps):
             notes = [n.rstrip(":") + ":" if _is_notes_header(n.rstrip(":")) else n for n in steps[i:]]
             return steps[:i], notes
     return steps, []
+
+
+NO_RECIPE_MSG = "לא נמצא מתכון בדף (אין schema.org Recipe ולא נמצאה רשימת מצרכים). הדביקו את הטקסט במקום הקישור."
+
+
+def _article_lines(page):
+    """Visible text lines of the post body (entry-content / <article>), one per block element."""
+    m = re.search(r'<div[^>]+class="[^"]*\bentry-content\b[^"]*"', page) or re.search(r"<article\b", page, re.I)
+    body = page[m.start():] if m else page
+    end = re.search(r"</article>|<footer\b|id=\"comments\"|class=\"[^\"]*\bcomments\b", body, re.I)
+    body = body[:end.start()] if end else body
+    body = re.sub(r"<(script|style)\b.*?</\1>", " ", body, flags=re.S | re.I)
+    body = re.sub(r"<br\s*/?>|</(?:p|li|h\d|div|tr)>", "\n", body, flags=re.I)
+    return [ln for ln in (clean(x) for x in body.split("\n")) if ln]
+
+
+def _teaser(s, n=280):
+    """Cut long intros at a word boundary."""
+    return s if len(s) <= n else s[:n].rsplit(" ", 1)[0] + "…"
+
+
+def from_article(page, url):
+    """Fallback for blog posts without JSON-LD: find the first ingredient block (2+ quantity-led lines),
+    take the title/intro above it and the instructions below, until the next recipe's title.
+    Only the first recipe in a multi-recipe post is taken."""
+    lines = _article_lines(page)
+    is_ing = lambda s: bool(QTY.match(s)) and len(s) <= 80
+    is_sub = lambda s: s.endswith(":") and len(s) <= 40          # "ללביבות:", "לרוטב:", "מכינים פירות:"
+    blocks = [i for i in range(len(lines) - 1) if is_ing(lines[i]) and is_ing(lines[i + 1])
+              and (i == 0 or not is_ing(lines[i - 1]))]
+    if not blocks:
+        raise ValueError(NO_RECIPE_MSG)
+    k = blocks[0]
+    start = k - 1 if k and is_sub(lines[k - 1]) else k
+    # Title = nearest short non-sentence line above (skip up to 2 intro paragraphs as description).
+    title, desc, j = "", [], start - 1
+    while j >= 0 and start - j <= 3:
+        ln = lines[j]
+        if len(ln) <= 90 and not ln.endswith((".", ":", "!")):
+            title = ln
+            break
+        desc.insert(0, ln)
+        j -= 1
+    if not title:
+        desc = []
+    # Ingredients run while lines stay short; the first long sentence starts the steps.
+    ings, i = [], start
+    while i < len(lines) and len(lines[i]) <= 80 and not lines[i].endswith("."):
+        ings.append(lines[i])
+        i += 1
+    # Steps end at the next recipe's title: a short heading followed by a long intro paragraph.
+    steps = []
+    while i < len(lines):
+        ln = lines[i]
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        if len(ln) <= 60 and not ln.endswith((".", ":", ",")) and not is_ing(ln) and len(nxt) > 150:
+            break
+        steps.append(ln)
+        i += 1
+    if not ings or not steps:
+        raise ValueError(NO_RECIPE_MSG)
+    steps, notes = split_notes(steps)
+    return {"title": title or _meta(page, "og:title") or url, "description": _teaser(" ".join(desc)),
+            "image": _meta(page, "og:image"), "servings": "", "total_minutes": None,
+            "ingredients": ings, "steps": steps, "notes": notes, "tags": [], "source_url": url}
 
 
 def from_text(text):

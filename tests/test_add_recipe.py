@@ -26,7 +26,7 @@ def test_jsonld_graph_recipe():
 
 def test_page_without_recipe_raises():
     try:
-        ar.from_html("<html><title>x</title></html>", "https://example.com")
+        ar.from_html("<html><title>x</title><article><p>just a story.</p></article></html>", "https://example.com")
     except ValueError:
         return
     raise AssertionError("expected ValueError")
@@ -141,3 +141,18 @@ def test_link_with_a_few_words_is_fetched(monkeypatch):
     monkeypatch.setattr(ar, "fetch", lambda url: (FIX / "recipe_page.html").read_text(encoding="utf-8"))
     r = ar.parse_input("תראי את זה https://example.com/shakshuka")
     assert r["title"] == "שקשוקה" and r["source_url"] == "https://example.com/shakshuka"
+
+
+def test_blog_post_without_jsonld_takes_first_recipe():
+    # Shape of michalwaxman.com: story, title, intro, sub-headed ingredients, steps, then a second recipe.
+    story = "<p>" + "סיפור ארוך על החג. " * 20 + "</p>"
+    page = ("<html><meta property=\"og:image\" content=\"http://x/a.jpg\"><div class=\"entry-content\">" + story +
+            "<p>סירניקי של סבתא</p><p>" + "לביבות גבינה מבושמות. " * 5 + "</p>"
+            "<p>ללביבות:<br>500 גרם גבינה<br>3 כפות סוכר<br>1 ביצה</p>"
+            "<p>להגשה:<br>שמנת חמוצה</p><p>מערבבים הכל בקערה.</p><p>מטגנים עד הזהבה.</p>"
+            "<p>סלט פירות</p>" + story + "<p>1 בננה<br>2 תפוחים</p><p>חותכים.</p></div></html>")
+    r = ar.from_html(page, "https://blog.example/p")
+    assert r["title"] == "סירניקי של סבתא"
+    assert r["ingredients"] == ["ללביבות:", "500 גרם גבינה", "3 כפות סוכר", "1 ביצה", "להגשה:", "שמנת חמוצה"]
+    assert r["steps"] == ["מערבבים הכל בקערה.", "מטגנים עד הזהבה."]
+    assert r["image"] == "http://x/a.jpg" and r["description"].startswith("לביבות")
